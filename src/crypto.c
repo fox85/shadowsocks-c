@@ -141,6 +141,21 @@ crypto_init(const char *password, const char *key, const char *method)
     if (sodium_init() == -1) {
         FATAL("Failed to initialize sodium");
     }
+    /* === 增加 NONE 加密类型支持开始 === */
+    if (method != NULL && strcmp(method, NONE_METHOD) == 0) {
+        cipher_t *cipher = (cipher_t *)calloc(1, sizeof(cipher_t));
+        if (cipher == NULL) {
+            return NULL;
+        }
+        cipher->method = NONE;
+        cipher->skey = 0;
+        cipher->nonce_len = 0;
+        cipher->key_len = 0;
+        cipher->tag_len = 0;
+        // 注意：新版项目使用了内部多级包装，这里我们直接返回填充好NONE的密码结构包装
+        return cipher; 
+    }
+}
 
     // Initialize NONCE bloom filter
 #ifdef MODULE_REMOTE
