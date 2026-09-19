@@ -81,6 +81,9 @@ typedef mbedtls_md_info_t digest_type_t;
 #define CRYPTO_ROLE_CLIENT 0
 #define CRYPTO_ROLE_SERVER 1
 
+#define NONE 0
+#define NONE_METHOD "none"
+
 #ifndef BF_NUM_ENTRIES_FOR_SERVER
 #define BF_NUM_ENTRIES_FOR_SERVER 1e6
 #endif
