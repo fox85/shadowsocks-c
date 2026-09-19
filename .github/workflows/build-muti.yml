@@ -1,0 +1,98 @@
+name: Multi-Arch Cross-Compile shadowsocks-c
+
+on:
+  workflow_dispatch: # 支持手动触发编译
+  push:
+    branches: [ "main", "master" ]
+
+jobs:
+  build:
+    name: Build for ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        # 定义架构矩阵：包含目标名称、CMake处理器类型以及对应的交叉编译器
+        include:
+          - arch: aarch64
+            processor: aarch64
+            compiler_prefix: aarch64-linux-gnu
+            apt_packages: gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+          
+          - arch: x64
+            processor: x86_64
+            compiler_prefix: x86_64-linux-gnu
+            apt_packages: gcc-x86-64-linux-gnu g++-x86-64-linux-gnu
+            
+          - arch: armv7
+            processor: armv7
+            compiler_prefix: arm-linux-gnueabihf
+            apt_packages: gcc-arm-linux-gnueabihf g++-arm-linux-gnueabihf
+
+    steps:
+      - name: Checkout shadowsocks-c source
+        uses: actions/checkout@v4
+        with:
+          repository: 'shadowsocks/shadowsocks-c'
+          submodules: 'recursive'
+
+      - name: Install Cross-Compilation Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build ${{ matrix.apt_packages }}
+
+      - name: Create CMake Toolchain File
+        run: |
+          cat << 'EOF' > cross-toolchain.cmake
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR ${{ matrix.processor }})
+
+          # 动态注入矩阵中的交叉编译器路径
+          set(CMAKE_C_COMPILER ${{ matrix.compiler_prefix }}-gcc)
+          set(CMAKE_CXX_COMPILER ${{ matrix.compiler_prefix }}-g++)
+
+          # 强制进行完全静态链接，保障在各版本 OpenWrt/Linux 上的免依赖兼容性
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+
+          # 注入静态链接标志
+          set(CMAKE_EXE_LINKER_FLAGS "-static" CACHE STRING "" FORCE)
+          EOF
+
+      - name: Configure CMake
+        run: |
+          mkdir build && cd build
+          cmake .. \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=../cross-toolchain.cmake \
+            -DWITH_STATIC=ON \
+            -DSS_MINIMAL=ON
+
+      - name: Build Binary
+        run: |
+          cd build
+          ninja
+
+      - name: Verify Binary
+        run: |
+          # 寻找编译出的核心二进制
+          TARGET_BIN=$(find build -name "ss-local" -type f | head -n 1)
+          if [ -z "$TARGET_BIN" ]; then
+            echo "Error: ss-local not found!" && exit 1
+          fi
+          
+          echo "Verified binary for ${{ matrix.arch }}:"
+          file "$TARGET_BIN"
+          
+          # 创建统一的归档目录，加入架构后缀防止混淆
+          mkdir -p output-artifacts
+          find build -name "ss-*" -type f -executable -exec cp {} output-artifacts/ \;
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          # 每个架构会独立生成一个压缩包
+          name: shadowsocks-c-openwrt-${{ matrix.arch }}
+          path: output-artifacts/
