@@ -1,0 +1,80 @@
+name: Cross-Compile shadowsocks-c for ARM64
+
+on:
+  workflow_dispatch: # 支持手动触发编译
+  push:
+    branches: [ "main", "master" ]
+
+jobs:
+  build-arm64:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout shadowsocks-c source
+        uses: actions/checkout@v4
+        with:
+          repository: 'shadowsocks/shadowsocks-c' # 自动拉取官方最新现代化代码
+          submodules: 'recursive'                  # 递归拉取所有可能需要的子模块
+
+      - name: Install Cross-Compilation Toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu cmake ninja-build
+
+      - name: Create CMake Toolchain File
+        run: |
+          cat << 'EOF' > arm64-toolchain.cmake
+          set(CMAKE_SYSTEM_NAME Linux)
+          set(CMAKE_SYSTEM_PROCESSOR aarch64)
+
+          # 指定交叉编译器位置
+          set(CMAKE_C_COMPILER aarch64-linux-gnu-gcc)
+          set(CMAKE_CXX_COMPILER aarch64-linux-gnu-g++)
+
+          # 强制进行完全静态链接，脱离 OpenWrt 路由器的动态库限制
+          set(CMAKE_FIND_ROOT_PATH_MODE_PROGRAM NEVER)
+          set(CMAKE_FIND_ROOT_PATH_MODE_LIBRARY ONLY)
+          set(CMAKE_FIND_ROOT_PATH_MODE_INCLUDE ONLY)
+
+          # 注入静态链接标志
+          set(CMAKE_EXE_LINKER_FLAGS "-static" CACHE STRING "" FORCE)
+          EOF
+
+      - name: Configure CMake
+        run: |
+          mkdir build && cd build
+          cmake .. \
+            -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE=../arm64-toolchain.cmake \
+            -DWITH_STATIC=ON \
+            -DSS_MINIMAL=ON
+          # 注：-DWITH_STATIC=ON 会让第三方依赖以静态方式打包
+          #    -DSS_MINIMAL=ON 会剔除 PCRE2 正则、插件管理等，大幅缩减二进制文件体积，完美适合路由器空间
+
+      - name: Build Binary
+        run: |
+          cd build
+          ninja
+
+      - name: Verify Binary
+        run: |
+          # 检查生成的二进制文件是否为合法的 ARM64 完全静态链接程序
+          # 现代版本的输出目录通常在 build-system/bin 或 build/bin 下
+          TARGET_BIN=$(find build -name "ss-local" -type f | head -n 1)
+          if [ -z "$TARGET_BIN" ]; then
+            echo "Error: ss-local not found!" && exit 1
+          fi
+          
+          echo "Found binary at: $TARGET_BIN"
+          file "$TARGET_BIN"
+          
+          # 将所有生成的 ss-* 二进制汇总到一个目录中用于上传
+          mkdir -p output-artifacts
+          find build -name "ss-*" -type f -executable -exec cp {} output-artifacts/ \;
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: shadowsocks-c-openwrt-arm64
+          path: output-artifacts/
